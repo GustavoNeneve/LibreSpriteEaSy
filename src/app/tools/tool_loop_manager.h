@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "app/tools/dynamics.h"
 #include "app/tools/pointer.h"
 #include "app/tools/stroke.h"
 #include "gfx/point.h"
@@ -49,6 +50,9 @@ public:
   // left or right button for first time in the editor).
   void prepareLoop(const Pointer& pointer);
 
+  // Configure dynamics options (must be called before prepareLoop).
+  void setDynamics(const DynamicsOptions& dynamics);
+
   // Should be called when the ToolLoop::getModifiers()
   // value was modified (e.g. when the user press/release a key).
   void notifyToolLoopModifiersChange();
@@ -65,6 +69,11 @@ public:
   // Should be called each time the user moves the mouse inside the editor.
   void movement(const Pointer& pointer);
 
+  // Temporarily disable the stroke stabilizer (e.g. while Shift is held
+  // to draw a straight-line preview). Re-enabled automatically on the
+  // next pressButton() call.
+  void disableMouseStabilizer();
+
 private:
   void doLoopStep(bool last_step);
   void snapToGrid(gfx::Point& point);
@@ -76,6 +85,11 @@ private:
   Pointer m_lastPointer;
   gfx::Point m_oldPoint;
   gfx::Region& m_dirtyArea;
+
+  // Stroke smoothing (Stabilizer) state
+  DynamicsOptions m_dynamics;
+  gfx::PointF     m_stabilizerCenter;
+  bool            m_stabilizerDisabled;  // True when Shift-line preview is active
 };
 
 } // namespace tools

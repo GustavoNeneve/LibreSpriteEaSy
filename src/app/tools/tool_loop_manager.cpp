@@ -22,8 +22,11 @@
 #include "doc/image.h"
 #include "doc/primitives.h"
 #include "doc/sprite.h"
+#include "gfx/point_io.h"
+#include "gfx/rect_io.h"
 #include "gfx/region.h"
 
+#include <cmath>
 #include <climits>
 
 namespace app {
@@ -36,6 +39,8 @@ using namespace filters;
 ToolLoopManager::ToolLoopManager(ToolLoop* toolLoop)
   : m_toolLoop(toolLoop)
   , m_dirtyArea(toolLoop->getDirtyArea())
+  , m_stabilizerCenter(0.0, 0.0)
+  , m_stabilizerDisabled(false)
 {
 }
 
@@ -53,10 +58,21 @@ void ToolLoopManager::prepareLoop(const Pointer& pointer)
   // Start with no points at all
   m_stroke.reset();
 
+  // Initialise the stabilizer center at the first pointer position so
+  // the first painted pixel falls exactly where the user clicked.
+  m_stabilizerCenter = gfx::PointF(static_cast<double>(pointer.point().x),
+                                   static_cast<double>(pointer.point().y));
+  m_stabilizerDisabled = false;
+
   // Prepare the ink
   m_toolLoop->getInk()->prepareInk(m_toolLoop);
   m_toolLoop->getIntertwine()->prepareIntertwine();
   m_toolLoop->getPointShape()->preparePointShape(m_toolLoop);
+}
+
+void ToolLoopManager::setDynamics(const DynamicsOptions& dynamics)
+{
+  m_dynamics = dynamics;
 }
 
 void ToolLoopManager::notifyToolLoopModifiersChange()
@@ -82,6 +98,11 @@ void ToolLoopManager::pressButton(const Pointer& pointer)
     m_toolLoop->cancel();
     return;
   }
+
+  // Re-enable the stabilizer and anchor its center at the pressed point.
+  m_stabilizerDisabled = false;
+  m_stabilizerCenter = gfx::PointF(static_cast<double>(pointer.point().x),
+                                   static_cast<double>(pointer.point().y));
 
   // Convert the screen point to a sprite point
   Point spritePoint = pointer.point();
@@ -131,6 +152,34 @@ void ToolLoopManager::movement(const Pointer& pointer)
   // Calculate the speed (new sprite point - old sprite point)
   m_toolLoop->setSpeed(spritePoint - m_oldPoint);
   m_oldPoint = spritePoint;
+
+  // ---- Stroke Stabilizer -----------------------------------------------
+  // When the stabilizer is active and not temporarily disabled, smooth the
+  // raw cursor position before delivering it to the controller.  The
+  // stabilizer center "chases" the real cursor at 1/stabilizerFactor of the
+  // remaining distance per event, producing an inertia-like lag.
+  if (m_dynamics.stabilizer &&
+      !m_stabilizerDisabled &&
+      m_toolLoop->getController()->isFreehand() &&
+      m_dynamics.stabilizerFactor > 1) {
+    const double dx = static_cast<double>(spritePoint.x) - m_stabilizerCenter.x;
+    const double dy = static_cast<double>(spritePoint.y) - m_stabilizerCenter.y;
+    const double distance = std::sqrt(dx * dx + dy * dy);
+
+    if (distance > 0.0) {
+      const double f = static_cast<double>(m_dynamics.stabilizerFactor);
+      const double step = distance / f;
+      const double angle = std::atan2(dy, dx);
+      m_stabilizerCenter.x += step * std::cos(angle);
+      m_stabilizerCenter.y += step * std::sin(angle);
+    }
+
+    // Deliver the smoothed point instead of the raw cursor.
+    spritePoint = Point(static_cast<int>(std::round(m_stabilizerCenter.x)),
+                        static_cast<int>(std::round(m_stabilizerCenter.y)));
+  }
+  // ----------------------------------------------------------------------
+
   snapToGrid(spritePoint);
 
   m_toolLoop->getController()->movement(m_toolLoop, m_stroke, spritePoint, pointer.pressure());
@@ -140,6 +189,11 @@ void ToolLoopManager::movement(const Pointer& pointer)
   m_toolLoop->updateStatusBar(statusText.c_str());
 
   doLoopStep(false);
+}
+
+void ToolLoopManager::disableMouseStabilizer()
+{
+  m_stabilizerDisabled = true;
 }
 
 void ToolLoopManager::doLoopStep(bool last_step)
